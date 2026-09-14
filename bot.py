@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import random
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -50,8 +51,42 @@ def get_action_keyboard():
     markup.add(btn_clear)
     return markup
 
+def enhance_image_prompt(user_prompt):
+    """Uses Gemini to translate Russian prompt into a detailed English prompt for Flux."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={config.GEMINI_API_KEY}"
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": "You are an expert prompt engineer for Flux AI. Translate the user's image request into a rich, photorealistic, highly detailed English prompt. Output ONLY the English prompt without quotes, explanations or intro."}]
+        },
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 300}
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=12)
+        if r.status_code == 200:
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            if text:
+                return text
+    except Exception as e:
+        logger.warning(f"Prompt enhancement fallback: {e}")
+    return user_prompt
+
+def generate_ai_image(prompt):
+    """Generates high quality image using Flux model without watermarks."""
+    try:
+        enhanced = enhance_image_prompt(prompt)
+        encoded_prompt = requests.utils.quote(enhanced)
+        seed = random.randint(1, 999999)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true&nofeed=true&seed={seed}"
+        resp = requests.get(url, timeout=60)
+        if resp.status_code == 200 and len(resp.content) > 1000:
+            return resp.content, enhanced
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+    return None, prompt
+
 def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
-    """Streams Gemini response to Telegram with UTF-8 live typing animation."""
+    """Streams Gemini response to Telegram with live typing animation."""
     headers = {"Content-Type": "application/json"}
     
     payload = {
@@ -124,7 +159,6 @@ def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
     if not full_text:
         full_text = "⚠️ Извини, произошел сбой при генерации. Попробуй еще разок!"
 
-    # Final render: clean Markdown and action buttons
     try:
         if len(full_text) <= 4000:
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown", reply_markup=get_action_keyboard())
@@ -162,17 +196,6 @@ def send_long_message(chat_id, text, reply_to_message_id=None):
             except Exception as e:
                 logger.error(f"Failed to send: {e}")
 
-def generate_ai_image(prompt):
-    try:
-        encoded_prompt = requests.utils.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-        resp = requests.get(url, timeout=45)
-        if resp.status_code == 200 and len(resp.content) > 1000:
-            return resp.content
-    except Exception as e:
-        logger.error(f"Image generation error: {e}")
-    return None
-
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     chat_id = message.chat.id
@@ -183,10 +206,10 @@ def handle_start(message):
         f"👋 Салют, {user_name}!\n\n"
         f"Я **AI for copil** ⚡\n\n"
         f"✨ **Что я умею:**\n"
-        f"• ✍️ Отвечать на любые вопросы без занудства\n"
+        f"• ✍️ Отвечать на любые вопросы в реальном времени\n"
         f"• 💻 Писать чистый код и скрипты (Lua, Python, JS, C++, C#)\n"
-        f"• 🎨 **Генерировать картинки:** `/image <описание>` или напиши *«нарисуй ...»*\n"
-        f"• 📷 **Анализировать фото:** отправь фото или скриншот\n"
+        f"• 🎨 **Генерировать 4K фото (Flux):** `/image <описание>` или напиши *«нарисуй ...»*\n"
+        f"• 📷 **Анализировать фото:** просто отправь мне фото или скриншот\n"
         f"• 💬 Помнить контекст беседы\n\n"
         f"📌 *Команды:*\n"
         f"/image <текст> — создать арт\n"
@@ -199,8 +222,8 @@ def handle_start(message):
 def handle_help(message):
     help_text = (
         "🤖 **AI for copil** (by k3rnel)\n\n"
-        "🎨 **Генерация фото:**\n"
-        "Напиши `/image киберпанк спорткар` или *«нарисуй космонавта»* — бот создаст картинку.\n\n"
+        "🎨 **Генерация фото (Flux HD):**\n"
+        "Напиши `/image неоновый спорткар` или *«нарисуй кота на скейте»* — бот создаст изображение без водяных знаков.\n\n"
         "💻 **Кодинг и скрипты:**\n"
         "Попроси написать любой скрипт на Lua (для Roblox / игр), Python или решить задачу.\n\n"
         "🔄 **Память:**\n"
@@ -223,9 +246,9 @@ def handle_image_command(message):
         return
 
     bot.send_chat_action(chat_id, "upload_photo")
-    status_msg = bot.send_message(chat_id, "🎨 Рисую изображение, секунду...")
+    status_msg = bot.send_message(chat_id, "🎨 _Генерирую фото через Flux AI, секунду..._", parse_mode="Markdown")
     
-    img_data = generate_ai_image(prompt)
+    img_data, enhanced = generate_ai_image(prompt)
     if img_data:
         try:
             bot.delete_message(chat_id, status_msg.message_id)
@@ -259,8 +282,8 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Создаю иллюстрацию...")
         last_prompt = last_user_prompts.get(chat_id, "futuristic art")
         bot.send_chat_action(chat_id, "upload_photo")
-        status_msg = bot.send_message(chat_id, f"🎨 Рисую иллюстрацию к теме: *{last_prompt[:50]}*...", parse_mode="Markdown")
-        img_data = generate_ai_image(last_prompt)
+        status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{last_prompt[:50]}*...", parse_mode="Markdown")
+        img_data, enhanced = generate_ai_image(last_prompt)
         if img_data:
             try:
                 bot.delete_message(chat_id, status_msg.message_id)
@@ -316,8 +339,8 @@ def handle_text(message):
             prompt = user_text[len(trigger):].strip()
             if prompt:
                 bot.send_chat_action(chat_id, "upload_photo")
-                status_msg = bot.send_message(chat_id, f"🎨 Рисую: *{prompt}*...", parse_mode="Markdown")
-                img_data = generate_ai_image(prompt)
+                status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{prompt}*...", parse_mode="Markdown")
+                img_data, enhanced = generate_ai_image(prompt)
                 if img_data:
                     try:
                         bot.delete_message(chat_id, status_msg.message_id)
@@ -352,7 +375,7 @@ def handle_text(message):
     user_histories[chat_id] = history
 
 def start_polling_loop():
-    print("🚀 AI for copil (by k3rnel) успешно запущен!")
+    print("🚀 AI for copil (by k3rnel) успешно запущен с Flux AI!")
     print("👉 Telegram: https://t.me/Pomoshotru_bot")
     while True:
         try:
