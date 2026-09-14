@@ -1,0 +1,22 @@
+{
+  "chats": {
+    "6363403785": {
+      "title": "",
+      "owner_id": null,
+      "owner_name": "",
+      "owner_username": "",
+      "admins": {},
+      "moders": {},
+      "warns": {},
+      "rules": "📌 *Правила чата пока не установлены.*\nИспользуйте команду `/setrules [текст]` для их создания.",
+      "rules_buttons": [],
+      "users": {
+        "6363403785": {
+          "id": 6363403785,
+          "name": "k3rnel",
+          "username": "k3rnel8633"
+        }
+      }
+    }
+  }
+}
