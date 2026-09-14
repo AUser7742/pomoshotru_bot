@@ -17,6 +17,24 @@
           "username": "k3rnel8633"
         }
       }
+    },
+    "-1003906751348": {
+      "title": "",
+      "owner_id": 6363403785,
+      "owner_name": "k3rnel",
+      "owner_username": "k3rnel8633",
+      "admins": {},
+      "moders": {},
+      "warns": {},
+      "rules": "📌 *Правила чата пока не установлены.*\nИспользуйте команду `/setrules [текст]` для их создания.",
+      "rules_buttons": [],
+      "users": {
+        "6363403785": {
+          "id": 6363403785,
+          "name": "k3rnel",
+          "username": "k3rnel8633"
+        }
+      }
     }
   }
 }
