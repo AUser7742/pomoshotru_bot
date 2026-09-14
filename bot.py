@@ -53,22 +53,24 @@ def get_action_keyboard():
 
 def enhance_image_prompt(user_prompt):
     """Uses Gemini to translate Russian prompt into a detailed English prompt for Flux."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={config.GEMINI_API_KEY}"
-    payload = {
-        "systemInstruction": {
-            "parts": [{"text": "You are an expert prompt engineer for Flux AI. Translate the user's image request into a rich, photorealistic, highly detailed English prompt. Output ONLY the English prompt without quotes, explanations or intro."}]
-        },
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 300}
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=12)
-        if r.status_code == 200:
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if text:
-                return text
-    except Exception as e:
-        logger.warning(f"Prompt enhancement fallback: {e}")
+    for model in ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest"]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={config.GEMINI_API_KEY}"
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": "You are an AI image prompt translator for Flux AI. Convert the user prompt into a concise, vivid, photorealistic English description (keywords, style, lighting, composition). Return ONLY the English prompt string, no markdown, no quotes."}]
+            },
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 150}
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=8)
+            if r.status_code == 200:
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if text:
+                    logger.info(f"Enhanced prompt with {model}: {text}")
+                    return text
+        except Exception as e:
+            continue
     return user_prompt
 
 def generate_ai_image(prompt):
@@ -332,11 +334,17 @@ def handle_text(message):
     lower_text = user_text.lower()
     last_user_prompts[chat_id] = user_text
 
-    # Trigger image generation on natural Russian phrases
-    image_triggers = ["нарисуй ", "нарисуй:", "сгенерируй фото ", "сгенерируй картинку ", "создай картинку ", "создай арт "]
-    for trigger in image_triggers:
-        if lower_text.startswith(trigger):
-            prompt = user_text[len(trigger):].strip()
+    # Trigger image generation on natural Russian phrases and commands
+    image_prefixes = [
+        "нарисуй мне ", "нарисуй пожалуйста ", "нарисуй ", "нарисуй:",
+        "сгенерируй фото ", "сгенерируй картинку ", "сгенерируй арт ", "сгенерируй ",
+        "создай картинку ", "создай фото ", "создай арт ", "создай изображение ",
+        "сделай фото ", "сделай картинку ", "сделай арт ", "рисуй ",
+        "/img ", "/image ", "/draw ", "/art "
+    ]
+    for prefix in image_prefixes:
+        if lower_text.startswith(prefix):
+            prompt = user_text[len(prefix):].strip()
             if prompt:
                 bot.send_chat_action(chat_id, "upload_photo")
                 status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{prompt}*...", parse_mode="Markdown")
