@@ -301,41 +301,59 @@ def extract_target_user(message, args):
 @bot.business_connection_handler()
 def handle_business_connection(connection):
     status = "активировано ✅" if connection.is_enabled else "отключено ❌"
-    logger.info(f"Telegram Business Connection from {connection.user.id}: {status}")
+    can_reply = "ДА (может отвечать) ✅" if getattr(connection, "can_reply", False) else "НЕТ (нет прав на ответ) ❌"
+    logger.info(f"Telegram Business Connection from {connection.user.id}: status={status}, can_reply={can_reply}")
 
 @bot.business_message_handler()
 def handle_business_message(message):
     """Handles incoming and outgoing messages from connected Telegram Business accounts."""
-    chat_id = message.chat.id
-    conn_id = message.business_connection_id
-    user = message.from_user
-    user_text = (message.text or message.caption or "").strip()
-    lower_text = user_text.lower()
-    
-    # 1. Commands triggered by creator (k3rnel) with dot prefix (.)
-    if is_user_creator(user):
-        if lower_text == ".ping":
-            bot.send_message(chat_id, "🏓 **Pong!** AI for copil подключен к твоему Telegram Business.", business_connection_id=conn_id, parse_mode="Markdown")
-            return
-        elif lower_text.startswith(".ai ") or lower_text.startswith(".ии "):
-            prompt = user_text[4:].strip()
-            contents = [{"role": "user", "parts": [{"text": prompt}]}]
-            ai_ans = generate_ai_response_text(contents)
-            bot.send_message(chat_id, ai_ans, business_connection_id=conn_id, parse_mode="Markdown")
-            return
-        elif lower_text.startswith(".draw ") or lower_text.startswith(".арт ") or lower_text.startswith(".нарисуй "):
-            prefix_len = len(lower_text.split()[0]) + 1
-            prompt = user_text[prefix_len:].strip()
-            img_data, _ = generate_ai_image(prompt)
-            if img_data:
-                bot.send_photo(chat_id, img_data, caption=f"✨ *Готово:* {prompt}", business_connection_id=conn_id, parse_mode="Markdown")
-            return
-        elif lower_text.startswith(".voice ") or lower_text.startswith(".голос "):
-            v_text = user_text[7:].strip()
-            audio_bytes = generate_voice_bytes(v_text)
-            if audio_bytes:
-                bot.send_voice(chat_id, audio_bytes, business_connection_id=conn_id)
-            return
+    try:
+        chat_id = message.chat.id
+        conn_id = message.business_connection_id
+        user = message.from_user
+        user_text = (message.text or message.caption or "").strip()
+        lower_text = user_text.lower()
+        
+        logger.info(f"Business message received from user={user.id} in chat={chat_id}: text='{user_text}'")
+
+        # 1. Commands triggered by creator (k3rnel) with dot prefix (.)
+        if is_user_creator(user):
+            if lower_text == ".ping":
+                try:
+                    bot.send_message(chat_id, "🏓 **Pong!** AI for copil подключен к твоему Telegram Business.", business_connection_id=conn_id, parse_mode="Markdown")
+                except Exception as e:
+                    logger.error(f"Error sending business .ping: {e}")
+                return
+            elif lower_text.startswith(".ai ") or lower_text.startswith(".ии "):
+                prompt = user_text[4:].strip()
+                contents = [{"role": "user", "parts": [{"text": prompt}]}]
+                ai_ans = generate_ai_response_text(contents)
+                try:
+                    bot.send_message(chat_id, ai_ans, business_connection_id=conn_id, parse_mode="Markdown")
+                except Exception as e:
+                    logger.error(f"Error sending business .ai: {e}")
+                return
+            elif lower_text.startswith(".draw ") or lower_text.startswith(".арт ") or lower_text.startswith(".нарисуй "):
+                prefix_len = len(lower_text.split()[0]) + 1
+                prompt = user_text[prefix_len:].strip()
+                img_data, _ = generate_ai_image(prompt)
+                if img_data:
+                    try:
+                        bot.send_photo(chat_id, img_data, caption=f"✨ *Готово:* {prompt}", business_connection_id=conn_id, parse_mode="Markdown")
+                    except Exception as e:
+                        logger.error(f"Error sending business .draw: {e}")
+                return
+            elif lower_text.startswith(".voice ") or lower_text.startswith(".голос "):
+                v_text = user_text[7:].strip()
+                audio_bytes = generate_voice_bytes(v_text)
+                if audio_bytes:
+                    try:
+                        bot.send_voice(chat_id, audio_bytes, business_connection_id=conn_id)
+                    except Exception as e:
+                        logger.error(f"Error sending business .voice: {e}")
+                return
+    except Exception as e:
+        logger.error(f"Unexpected error in business message handler: {e}")
 
 # ==========================================
 # COMMAND HANDLERS
