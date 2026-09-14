@@ -150,6 +150,34 @@ def generate_ai_image(prompt):
         logger.error(f"Image generation error: {e}")
     return None, prompt
 
+def generate_ai_response_text(contents, custom_system_prompt=None):
+    """Synchronously generates full AI text response from Gemini model chain."""
+    headers = {"Content-Type": "application/json"}
+    sys_prompt = custom_system_prompt or MAIN_SYSTEM_PROMPT
+    payload = {
+        "systemInstruction": {"parts": [{"text": sys_prompt}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.85, "maxOutputTokens": 4096},
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
+    }
+    models_order = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+    for model in models_order:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={config.GEMINI_API_KEY}"
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=25)
+            if r.status_code == 200:
+                parts = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                if parts and "text" in parts[0]:
+                    return parts[0]["text"].strip()
+        except Exception:
+            continue
+    return "⚠️ Не удалось сгенерировать ответ. Попробуй позже."
+
 def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None, custom_system_prompt=None):
     """Streams Gemini response to Telegram with live typing animation."""
     headers = {"Content-Type": "application/json"}
@@ -267,6 +295,49 @@ def extract_target_user(message, args):
     return None, None, None, args
 
 # ==========================================
+# TELEGRAM BUSINESS INTEGRATION (OFFICIAL)
+# ==========================================
+
+@bot.business_connection_handler()
+def handle_business_connection(connection):
+    status = "активировано ✅" if connection.is_enabled else "отключено ❌"
+    logger.info(f"Telegram Business Connection from {connection.user.id}: {status}")
+
+@bot.business_message_handler()
+def handle_business_message(message):
+    """Handles incoming and outgoing messages from connected Telegram Business accounts."""
+    chat_id = message.chat.id
+    conn_id = message.business_connection_id
+    user = message.from_user
+    user_text = (message.text or message.caption or "").strip()
+    lower_text = user_text.lower()
+    
+    # 1. Commands triggered by creator (k3rnel) with dot prefix (.)
+    if is_user_creator(user):
+        if lower_text == ".ping":
+            bot.send_message(chat_id, "🏓 **Pong!** AI for copil подключен к твоему Telegram Business.", business_connection_id=conn_id, parse_mode="Markdown")
+            return
+        elif lower_text.startswith(".ai ") or lower_text.startswith(".ии "):
+            prompt = user_text[4:].strip()
+            contents = [{"role": "user", "parts": [{"text": prompt}]}]
+            ai_ans = generate_ai_response_text(contents)
+            bot.send_message(chat_id, ai_ans, business_connection_id=conn_id, parse_mode="Markdown")
+            return
+        elif lower_text.startswith(".draw ") or lower_text.startswith(".арт ") or lower_text.startswith(".нарисуй "):
+            prefix_len = len(lower_text.split()[0]) + 1
+            prompt = user_text[prefix_len:].strip()
+            img_data, _ = generate_ai_image(prompt)
+            if img_data:
+                bot.send_photo(chat_id, img_data, caption=f"✨ *Готово:* {prompt}", business_connection_id=conn_id, parse_mode="Markdown")
+            return
+        elif lower_text.startswith(".voice ") or lower_text.startswith(".голос "):
+            v_text = user_text[7:].strip()
+            audio_bytes = generate_voice_bytes(v_text)
+            if audio_bytes:
+                bot.send_voice(chat_id, audio_bytes, business_connection_id=conn_id)
+            return
+
+# ==========================================
 # COMMAND HANDLERS
 # ==========================================
 
@@ -280,6 +351,7 @@ def send_welcome(message):
         "💬 *Диалог и скрипты:* пишу читы/скрипты на Lua, Python, C++, JS.\n"
         "🎨 *Генерация фото:* пиши `нарисуй [что хочешь]` — сгенерирую сочный арт через Flux.\n"
         "🎙 *Голосовые сообщения:* команда `/voice [текст]` или кнопка *«🎙 Озвучить»* под ответом.\n"
+        "💼 *Telegram Business:* можно привязать к твоему профилю в Настройки → Telegram для бизнеса → Чат-боты!\n"
         "🎥 *Медиа-анализ:* отправь фото, видео, кружочек или голосовое — разберу всё по фактам.\n"
         "👤 *Профиль:* команда `/profile` покажет статус в системе.\n"
         "🛡 *Модерация:* добавь меня в беседу для управления группой.\n\n"

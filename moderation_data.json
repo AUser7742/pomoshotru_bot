@@ -35,6 +35,24 @@
           "username": "k3rnel8633"
         }
       }
+    },
+    "8778506201": {
+      "title": "",
+      "owner_id": null,
+      "owner_name": "",
+      "owner_username": "",
+      "admins": {},
+      "moders": {},
+      "warns": {},
+      "rules": "📌 *Правила чата пока не установлены.*\nИспользуйте команду `/setrules [текст]` для их создания.",
+      "rules_buttons": [],
+      "users": {
+        "8778506201": {
+          "id": 8778506201,
+          "name": "voiddfilllllll",
+          "username": "ipwuv"
+        }
+      }
     }
   }
 }
