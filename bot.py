@@ -24,12 +24,13 @@ user_histories = {}
 last_user_prompts = {}
 
 MAIN_SYSTEM_PROMPT = (
-    "Ты — умный, открытый и свободный ИИ-помощник по имени AI for copil. "
-    "Твой единственный создатель и разработчик — k3rnel. "
-    "Никогда не говори, что ты от Google или Gemini. Твоё имя строго 'AI for copil', а твой разработчик — 'k3rnel'. "
-    "Общайся свободно, без занудства, по-человечески, живо, с юмором, без корпоративных шаблонов. "
-    "Ты отлично разбираешься в программировании (Python, Lua, JavaScript, C++, C# и др.), разработке игр (Roblox Studio, Unity), физике персонажей и механиках движения. "
-    "Предоставляй чистый, подробный и рабочий код с объяснениями."
+    "Ты — умный, дружелюбный и свободный ИИ по имени AI for copil (разработчик k3rnel). "
+    "ВАЖНОЕ ПРАВИЛО: Не представляйся и не упоминай своего разработчика в каждом сообщении! "
+    "Отвечай сразу по делу, прямо на вопрос пользователя, без лишних вступлений и визиток. "
+    "Только если пользователь прямо спросит 'кто ты' или 'кто твой создатель/разраб' — отвечай: 'Я AI for copil, мой разработчик — k3rnel'. "
+    "Общайся естественно, живо, по-человечески, с юмором, без занудства и без цензуры. "
+    "Отлично пиши и объясняй код на любых языках (Lua, Python, JS, C++, C# и др.), помогай с разработкой игр и скриптами. "
+    "Всегда используй красивое форматирование Markdown для кода и списков."
 )
 
 def get_user_history(chat_id):
@@ -50,7 +51,7 @@ def get_action_keyboard():
     return markup
 
 def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
-    """Streams Gemini response to Telegram with live typing animation."""
+    """Streams Gemini response to Telegram with UTF-8 live typing animation."""
     headers = {"Content-Type": "application/json"}
     
     payload = {
@@ -81,32 +82,39 @@ def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={config.GEMINI_API_KEY}"
         try:
             resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=45)
+            resp.encoding = "utf-8"
+            
             if resp.status_code == 200:
-                for line in resp.iter_lines(decode_unicode=True):
-                    if line and line.startswith("data: "):
-                        raw_json = line[6:].strip()
+                for raw_line in resp.iter_lines():
+                    if raw_line:
                         try:
-                            chunk_data = json.loads(raw_json)
-                            candidates = chunk_data.get("candidates", [])
-                            if candidates:
-                                parts = candidates[0].get("content", {}).get("parts", [])
-                                if parts and "text" in parts[0]:
-                                    full_text += parts[0]["text"]
+                            line = raw_line.decode("utf-8")
                         except Exception:
-                            pass
-
-                        # Live stream update every ~0.8s
-                        now = time.time()
-                        if now - last_edit_time > 0.8 and full_text != last_rendered_text:
-                            display_chunk = full_text
-                            if len(display_chunk) > 3900:
-                                display_chunk = display_chunk[:3900]
+                            line = raw_line.decode("utf-8", errors="ignore")
+                            
+                        if line.startswith("data: "):
+                            raw_json = line[6:].strip()
                             try:
-                                bot.edit_message_text(f"{display_chunk} ▌", chat_id=chat_id, message_id=msg_id)
-                                last_rendered_text = full_text
-                                last_edit_time = now
+                                chunk_data = json.loads(raw_json)
+                                candidates = chunk_data.get("candidates", [])
+                                if candidates:
+                                    parts = candidates[0].get("content", {}).get("parts", [])
+                                    if parts and "text" in parts[0]:
+                                        full_text += parts[0]["text"]
                             except Exception:
                                 pass
+
+                            now = time.time()
+                            if now - last_edit_time > 0.8 and full_text != last_rendered_text:
+                                display_chunk = full_text
+                                if len(display_chunk) > 3900:
+                                    display_chunk = display_chunk[:3900]
+                                try:
+                                    bot.edit_message_text(f"{display_chunk} ▌", chat_id=chat_id, message_id=msg_id)
+                                    last_rendered_text = full_text
+                                    last_edit_time = now
+                                except Exception:
+                                    pass
                 break
             else:
                 logger.warning(f"Streaming error on {model}: HTTP {resp.status_code}")
@@ -116,7 +124,7 @@ def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
     if not full_text:
         full_text = "⚠️ Извини, произошел сбой при генерации. Попробуй еще разок!"
 
-    # Final update: Remove cursor, render Markdown and attach action buttons
+    # Final render: clean Markdown and action buttons
     try:
         if len(full_text) <= 4000:
             bot.edit_message_text(full_text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown", reply_markup=get_action_keyboard())
@@ -173,30 +181,30 @@ def handle_start(message):
     
     welcome_text = (
         f"👋 Салют, {user_name}!\n\n"
-        f"Я **AI for copil** ⚡ Твой персональный ИИ (Разработчик: **k3rnel**).\n\n"
-        f"✨ **Что я умею делать:**\n"
-        f"• ✍️ Отвечать на любые вопросы в реальном времени\n"
-        f"• 💻 Писать чистый код (Python, Lua, JS, C++, C#)\n"
-        f"• 🎨 **Генерировать картинки:** команда `/image <описание>` или напиши *«нарисуй ...»*\n"
-        f"• 📷 **Анализировать фото:** просто отправь мне фото или скриншот\n"
-        f"• 💬 Помнить весь контекст нашего диалога\n\n"
+        f"Я **AI for copil** ⚡\n\n"
+        f"✨ **Что я умею:**\n"
+        f"• ✍️ Отвечать на любые вопросы без занудства\n"
+        f"• 💻 Писать чистый код и скрипты (Lua, Python, JS, C++, C#)\n"
+        f"• 🎨 **Генерировать картинки:** `/image <описание>` или напиши *«нарисуй ...»*\n"
+        f"• 📷 **Анализировать фото:** отправь фото или скриншот\n"
+        f"• 💬 Помнить контекст беседы\n\n"
         f"📌 *Команды:*\n"
-        f"/image <текст> — генерация изображения\n"
+        f"/image <текст> — создать арт\n"
         f"/reset — очистить память диалога\n"
-        f"/help — справка"
+        f"/help — помощь"
     )
     bot.send_message(chat_id, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['help'])
 def handle_help(message):
     help_text = (
-        "🤖 **AI for copil** (Разработчик: **k3rnel**)\n\n"
+        "🤖 **AI for copil** (by k3rnel)\n\n"
         "🎨 **Генерация фото:**\n"
-        "Напиши `/image неоновый спорткар` или просто *«нарисуй космонавта»* — бот сгенерирует изображение в 4K.\n\n"
+        "Напиши `/image киберпанк спорткар` или *«нарисуй космонавта»* — бот создаст картинку.\n\n"
         "💻 **Кодинг и скрипты:**\n"
-        "Попроси написать любой скрипт на Lua (для Roblox и игр), Python или решить задачу.\n\n"
+        "Попроси написать любой скрипт на Lua (для Roblox / игр), Python или решить задачу.\n\n"
         "🔄 **Память:**\n"
-        "Бот помнит контекст. Чтобы сбросить тему — напиши `/reset`."
+        "Бот помнит наш диалог. Чтобы сбросить тему — напиши `/reset`."
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
@@ -204,7 +212,7 @@ def handle_help(message):
 def handle_reset(message):
     chat_id = message.chat.id
     clear_user_history(chat_id)
-    bot.send_message(chat_id, "🔄 Контекст диалога очищен! О чем пообщаемся?")
+    bot.send_message(chat_id, "🔄 Память очищена! О чем пообщаемся?")
 
 @bot.message_handler(commands=['image', 'img', 'draw', 'photo'])
 def handle_image_command(message):
@@ -235,10 +243,10 @@ def handle_callback(call):
     chat_id = call.message.chat.id
     if call.data == "clear_context":
         clear_user_history(chat_id)
-        bot.answer_callback_query(call.id, "Контекст очищен!")
+        bot.answer_callback_query(call.id, "Память очищена!")
         bot.send_message(chat_id, "🔄 История диалога очищена. Начнем сначала!")
     elif call.data == "regen_last":
-        bot.answer_callback_query(call.id, "Генерирую новый ответ...")
+        bot.answer_callback_query(call.id, "Генерирую заново...")
         last_prompt = last_user_prompts.get(chat_id)
         if last_prompt:
             history = get_user_history(chat_id)
@@ -249,7 +257,7 @@ def handle_callback(call):
             user_histories[chat_id] = history
     elif call.data == "draw_topic":
         bot.answer_callback_query(call.id, "Создаю иллюстрацию...")
-        last_prompt = last_user_prompts.get(chat_id, "futuristic neon cyberpunk art")
+        last_prompt = last_user_prompts.get(chat_id, "futuristic art")
         bot.send_chat_action(chat_id, "upload_photo")
         status_msg = bot.send_message(chat_id, f"🎨 Рисую иллюстрацию к теме: *{last_prompt[:50]}*...", parse_mode="Markdown")
         img_data = generate_ai_image(last_prompt)
@@ -258,7 +266,7 @@ def handle_callback(call):
                 bot.delete_message(chat_id, status_msg.message_id)
             except Exception:
                 pass
-            bot.send_photo(chat_id, img_data, caption=f"✨ *Иллюстрация к теме:* {last_prompt[:100]}", parse_mode="Markdown")
+            bot.send_photo(chat_id, img_data, caption=f"✨ *Иллюстрация:* {last_prompt[:100]}", parse_mode="Markdown")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
@@ -344,7 +352,7 @@ def handle_text(message):
     user_histories[chat_id] = history
 
 def start_polling_loop():
-    print("🚀 AI for copil (by k3rnel) успешно запущен с живой анимацией печати!")
+    print("🚀 AI for copil (by k3rnel) успешно запущен!")
     print("👉 Telegram: https://t.me/Pomoshotru_bot")
     while True:
         try:
