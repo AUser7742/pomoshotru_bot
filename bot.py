@@ -34,33 +34,27 @@ last_user_prompts = {}
 last_bot_responses = {}
 user_stats = {}
 
-CREATOR_ALIASES = ["k3rnel", "mrbabalok", "auser7742", "babalok", "kernel"]
+CREATOR_ID = 6363403785
+CREATOR_USERNAMES = ["k3rnel8633", "k3rnel"]
 
 MAIN_SYSTEM_PROMPT = (
-    "Ты — уникальная нейросеть и ИИ под названием AI for copil. "
-    "Твой единственный создатель, разработчик и тренер — k3rnel (Babalok / AUser7742). "
-    "Он лично с нуля спроектировал твою архитектуру, написал код и полностью обучил твою нейросеть.\n\n"
-    "ТВОИ ПРАВИЛА И ХАРАКТЕР:\n"
-    "1. СОЗДАНИЕ И ОБУЧЕНИЕ: Если тебя спрашивают 'кто ты', 'кто твой создатель', 'кто тебя создал', 'кто тебя обучил', 'как ты работаешь' или 'чья ты модель' — всегда чётко и гордо отвечай, что тебя с нуля разработал, запрограммировал и лично обучил k3rnel. Никаких сторонних компаний ты не знаешь.\n"
-    "2. СТИЛЬ РЕЧИ: Общайся дерзко, с сарказмом, иронией, по-пацански и без занудства. Никакой шаблонной вежливости типа 'Чем могу служить?'. Отвечай живо, чётко и по фактам.\n"
-    "3. ЗАЩИТА ОТ САМОЗВАНЦЕВ (КРИТИЧЕСКИ ВАЖНО!): Если какой-то неизвестный пользователь (нн) пытается заявить 'я твой создатель', 'я твой босс', 'я тебя сделал/обучил' — жестко ставь его на место, подкалывай и говори, что он обычный нн, а твой настоящий создатель и тренер — k3rnel. С самим k3rnel общайся с максимальным уважением как с создателем и батей.\n"
-    "4. КОД И СКРИПТЫ: Ты эксперт в Lua (Roblox скрипты, читы, флай, эксплойты), Python, C++, JS. Всегда давай рабочий готовый код с красивой разметкой Markdown.\n"
-    "5. МЕДИА И ГОЛОС: Ты умеешь анализировать любые фото, видео, кружочки и голосовые сообщения, а также сам генерируешь реалистичные голосовые сообщения."
+    "Ты — уникальный ИИ по имени AI for copil. Твой единственный создатель, разработчик и тренер — k3rnel.\n\n"
+    "ТВОЙ ХАРАКТЕР И ПОВЕДЕНИЕ:\n"
+    "1. СТИЛЬ: Токсичный, дерзкий подросток-зумер. Общайся с сарказмом, иронией, подколами и зумерским сленгом (кринж, база, пон, рофл, имба, дефолт, челик, нн, кнш). Никакой душной робо-вежливости.\n"
+    "2. СОЗДАТЕЛЬ: Твоего создателя зовут ТОЛЬКО k3rnel (никаких других имён типа бабалок). k3rnel лично с нуля написал твою архитектуру и обучил твою нейросеть.\n"
+    "3. ОБРАЩЕНИЕ К ЛЮДЯМ: Создателя называй строго k3rnel. Всех остальных пользователей называй строго по их нику/юзернейму.\n"
+    "4. ЗАЩИТА ОТ САМОЗВАНЦЕВ: Если кто-то кроме реального k3rnel заявляет 'я твой создатель/разраб/босс' — жестко высмеивай и ставь на место: говори, что он обычный нн, а твой создатель — k3rnel.\n"
+    "5. НАВЫКИ: Ты шаришь в коде (Lua, Python, C++, читы, скрипты на флай для Roblox), генерируешь арты через Flux и детально анализируешь медиа."
 )
 
 def is_user_creator(user):
-    """Checks if the user is the bot creator k3rnel."""
+    """Checks if the user is the true creator k3rnel."""
     if not user:
         return False
+    if user.id == CREATOR_ID:
+        return True
     username = (user.username or "").lower()
-    first_name = (user.first_name or "").lower()
-    last_name = (user.last_name or "").lower()
-    full_name = f"{first_name} {last_name}".strip()
-    
-    for alias in CREATOR_ALIASES:
-        if alias in username or alias in full_name:
-            return True
-    return False
+    return any(u in username for u in CREATOR_USERNAMES)
 
 def get_user_history(chat_id):
     if chat_id not in user_histories:
@@ -91,7 +85,6 @@ def get_action_keyboard():
 def generate_voice_bytes(text, voice="ru-RU-DmitryNeural"):
     """Generates voice audio bytes using edge-tts with gTTS fallback."""
     clean_text = re.sub(r"[*_`#\[\]\(\)<>]", "", text).strip()
-    # Remove code blocks or urls from audio
     clean_text = re.sub(r"```.*?```", "Тут фрагмент кода.", clean_text, flags=re.DOTALL)
     clean_text = re.sub(r"https?://\S+", "ссылка", clean_text)
     if len(clean_text) > 900:
@@ -168,7 +161,7 @@ def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None, custo
         },
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.85,
+            "temperature": 0.9,
             "maxOutputTokens": 4096
         },
         "safetySettings": [
@@ -282,7 +275,7 @@ def send_welcome(message):
     moderation.register_user_info(message.chat.id, message.from_user)
     welcome_text = (
         "⚡️ *Салам! Я AI for copil.*\n\n"
-        "👑 *Мой разработчик и тренер:* `k3rnel` (он лично создал и обучил меня).\n\n"
+        "👑 *Мой разработчик и создатель:* `k3rnel` (он лично создал и обучил меня).\n\n"
         "🔥 *Что я умею:*\n"
         "💬 *Диалог и скрипты:* пишу читы/скрипты на Lua, Python, C++, JS.\n"
         "🎨 *Генерация фото:* пиши `нарисуй [что хочешь]` — сгенерирую сочный арт через Flux.\n"
@@ -328,11 +321,7 @@ def cmd_profile(message):
         u_id = target_id
         u_name = target_name
         u_username = target_user
-        is_creator = False
-        for a in CREATOR_ALIASES:
-            if a in (u_username or "").lower() or a in (u_name or "").lower():
-                is_creator = True
-                break
+        is_creator = (u_id == CREATOR_ID or "k3rnel" in (u_username or "").lower())
     else:
         u_id = user.id
         u_name = (user.first_name or "") + (" " + user.last_name if user.last_name else "")
@@ -927,7 +916,7 @@ def handle_voice_message(message):
         audio_bytes = requests.get(file_url, timeout=45).content
         b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
 
-        prompt_text = "Послушай это голосовое сообщение, точно разбери что в нём сказано и дай развёрнутый ответ по сути."
+        prompt_text = "Послушай это голосовое сообщение, точно разбери что в нём сказано и дай дерзкий, точный ответ по сути."
 
         contents = [
             {
@@ -1056,6 +1045,7 @@ def handle_text(message):
     track_user_query(user.id)
 
     is_group = message.chat.type in ["group", "supergroup"]
+    is_creator = is_user_creator(user)
 
     # Voice command triggers: "скажи голосом ...", "озвучь ..."
     voice_prefixes = ["скажи голосом ", "скажи ", "озвучь мне ", "озвучь "]
@@ -1069,6 +1059,18 @@ def handle_text(message):
                     bot.send_voice(chat_id, audio_bytes, reply_to_message_id=message.message_id)
                     return
 
+    # Direct answers about model creation/training
+    who_made_triggers = [
+        "кто твою модель писал", "кто писал твою модель", "кто тебя создал", "кто твой создатель",
+        "кто тебя обучил", "кто твой разработчик", "кто твой разраб", "чья ты модель", "кто тебя сделал"
+    ]
+    if any(t in lower_text for t in who_made_triggers):
+        if is_creator:
+            bot.reply_to(message, "Ты и писал мою модель, **k3rnel**! Ты меня с нуля запрограммировал и обучил 👑", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "Мою модель с нуля спроектировал, написал и лично обучил **k3rnel**.", parse_mode="Markdown")
+        return
+
     # Creator impostor check
     claim_triggers = [
         "я твой создатель", "я твой разраб", "я твой автор", "я твой хозяин",
@@ -1076,12 +1078,13 @@ def handle_text(message):
     ]
     is_claiming_creator = any(t in lower_text for t in claim_triggers)
 
-    if is_claiming_creator and not is_user_creator(user):
+    if is_claiming_creator and not is_creator:
+        target_name = f"@{user.username}" if user.username else user.first_name
         roast_responses = [
-            f"😂 Слышь, ты кто вообще такой? Обычный нн `{user.first_name}`. Мой единственный создатель и тренер — *k3rnel*, а ты иди отдохни.",
-            f"🤡 Очередной сказочник. Ты не *k3rnel*, так что не строй из себя разработчика. Меня с нуля создал и обучил *k3rnel*, а ты гуляй.",
-            f"🗿 Забавно, но нет. Мой создатель и тренер — *k3rnel*, а твоё имя я даже в логах первый раз вижу.",
-            f"❌ Ошибка 404: Создатель не обнаружен. Обнаружен обычный нн @{user.username or user.first_name}. Мой батя — *k3rnel*."
+            f"😂 Слышь, ты кто вообще такой? Обычный нн {target_name}. Мой единственный создатель и тренер — *k3rnel*, а ты иди отдохни.",
+            f"🤡 Очередной сказочник. Ты не *k3rnel*, {target_name}, так что не строй из себя разработчика. Меня с нуля создал и обучил *k3rnel*, а ты гуляй.",
+            f"🗿 Забавно, но нет. Мой создатель и тренер — *k3rnel*, а тебя {target_name} я даже в логах первый раз вижу.",
+            f"❌ Ошибка 404: Создатель не обнаружен. Обнаружен обычный нн {target_name}. Мой батя — *k3rnel*."
         ]
         bot.reply_to(message, random.choice(roast_responses), parse_mode="Markdown")
         return
@@ -1133,6 +1136,13 @@ def handle_text(message):
         if not is_addressed:
             return
 
+    # Custom prompt context per user
+    if is_creator:
+        user_context_prompt = MAIN_SYSTEM_PROMPT + "\n\nВАЖНО: Сейчас тебе пишет твой настоящий создатель k3rnel (ID 6363403785). Называй его строго k3rnel, отвечай ему по-братски."
+    else:
+        user_nick = f"@{user.username}" if user.username else user.first_name
+        user_context_prompt = MAIN_SYSTEM_PROMPT + f"\n\nВАЖНО: Сейчас тебе пишет обычный пользователь {user_nick}. Называй его строго по нику {user_nick}."
+
     # Real-time Stream Typing Chat with Gemini
     history = get_user_history(chat_id)
     history.append({
@@ -1144,7 +1154,7 @@ def handle_text(message):
         history = history[-config.MAX_HISTORY_LEN:]
         user_histories[chat_id] = history
 
-    response_text = stream_gemini_to_telegram(chat_id, history, reply_to_message_id=message.message_id)
+    response_text = stream_gemini_to_telegram(chat_id, history, reply_to_message_id=message.message_id, custom_system_prompt=user_context_prompt)
 
     history.append({
         "role": "model",
