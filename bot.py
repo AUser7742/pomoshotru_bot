@@ -2,6 +2,8 @@ import sys
 import os
 import time
 import random
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -15,6 +17,7 @@ import base64
 import json
 import logging
 import config
+import moderation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -142,131 +145,592 @@ def stream_gemini_to_telegram(chat_id, contents, reply_to_message_id=None):
                                 pass
 
                             now = time.time()
-                            if now - last_edit_time > 0.8 and full_text != last_rendered_text:
-                                display_chunk = full_text
-                                if len(display_chunk) > 3900:
-                                    display_chunk = display_chunk[:3900]
+                            if now - last_edit_time > 1.2 and full_text.strip() and full_text != last_rendered_text:
+                                display_chunk = full_text.strip()
+                                if len(display_chunk) > 4000:
+                                    display_chunk = display_chunk[-4000:]
+                                display_text = display_chunk + " ▌"
                                 try:
-                                    bot.edit_message_text(f"{display_chunk} ▌", chat_id=chat_id, message_id=msg_id)
+                                    bot.edit_message_text(display_text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
                                     last_rendered_text = full_text
                                     last_edit_time = now
                                 except Exception:
-                                    pass
+                                    try:
+                                        bot.edit_message_text(display_text, chat_id=chat_id, message_id=msg_id)
+                                        last_rendered_text = full_text
+                                        last_edit_time = now
+                                    except Exception:
+                                        pass
                 break
             else:
-                logger.warning(f"Streaming error on {model}: HTTP {resp.status_code}")
+                logger.warning(f"Model {model} returned {resp.status_code}, trying next...")
         except Exception as e:
-            logger.error(f"Streaming exception on {model}: {e}")
+            logger.warning(f"Streaming error on {model}: {e}")
+            continue
 
-    if not full_text:
-        full_text = "⚠️ Извини, произошел сбой при генерации. Попробуй еще разок!"
+    if not full_text.strip():
+        full_text = "⚠️ Не удалось сгенерировать ответ. Попробуй переформулировать вопрос!"
 
+    final_text = full_text.strip()
     try:
-        if len(full_text) <= 4000:
-            bot.edit_message_text(full_text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown", reply_markup=get_action_keyboard())
-        else:
-            bot.delete_message(chat_id, msg_id)
-            send_long_message(chat_id, full_text, reply_to_message_id=reply_to_message_id)
+        bot.edit_message_text(final_text, chat_id=chat_id, message_id=msg_id, parse_mode="Markdown", reply_markup=get_action_keyboard())
     except Exception:
         try:
-            bot.edit_message_text(full_text, chat_id=chat_id, message_id=msg_id, reply_markup=get_action_keyboard())
+            bot.edit_message_text(final_text, chat_id=chat_id, message_id=msg_id, reply_markup=get_action_keyboard())
         except Exception:
             pass
 
-    return full_text
+    return final_text
 
-def send_long_message(chat_id, text, reply_to_message_id=None):
-    max_len = 4000
-    parts = []
-    while len(text) > max_len:
-        split_idx = text.rfind("\n", 0, max_len)
-        if split_idx == -1:
-            split_idx = max_len
-        parts.append(text[:split_idx])
-        text = text[split_idx:].lstrip()
-    if text:
-        parts.append(text)
+# ==========================================
+# MODERATION & TARGET EXTRACTION HELPERS
+# ==========================================
 
-    for idx, part in enumerate(parts):
-        reply_id = reply_to_message_id if idx == 0 else None
-        markup = get_action_keyboard() if idx == len(parts) - 1 else None
-        try:
-            bot.send_message(chat_id, part, parse_mode="Markdown", reply_to_message_id=reply_id, reply_markup=markup)
-        except Exception:
-            try:
-                bot.send_message(chat_id, part, reply_to_message_id=reply_id, reply_markup=markup)
-            except Exception as e:
-                logger.error(f"Failed to send: {e}")
-
-@bot.message_handler(commands=['start'])
-def handle_start(message):
+def extract_target_user(message, args):
+    """
+    Extracts (target_id, target_name, target_username, remaining_args).
+    Works via message reply or @username/user_id argument.
+    """
     chat_id = message.chat.id
-    clear_user_history(chat_id)
-    user_name = message.from_user.first_name or "друг"
+    if message.reply_to_message and message.reply_to_message.from_user:
+        u = message.reply_to_message.from_user
+        uname = (u.first_name or "") + (" " + u.last_name if u.last_name else "")
+        moderation.register_user_info(chat_id, u)
+        return u.id, uname.strip() or f"id_{u.id}", u.username or "", args
     
-    welcome_text = (
-        f"👋 Салют, {user_name}!\n\n"
-        f"Я **AI for copil** ⚡\n\n"
-        f"✨ **Что я умею:**\n"
-        f"• ✍️ Отвечать на любые вопросы в реальном времени\n"
-        f"• 💻 Писать чистый код и скрипты (Lua, Python, JS, C++, C#)\n"
-        f"• 🎨 **Генерировать 4K фото (Flux):** `/image <описание>` или напиши *«нарисуй ...»*\n"
-        f"• 📷 **Анализировать фото:** просто отправь мне фото или скриншот\n"
-        f"• 💬 Помнить контекст беседы\n\n"
-        f"📌 *Команды:*\n"
-        f"/image <текст> — создать арт\n"
-        f"/reset — очистить память диалога\n"
-        f"/help — помощь"
-    )
-    bot.send_message(chat_id, welcome_text, parse_mode="Markdown")
+    if args:
+        first_arg = args[0]
+        if first_arg.startswith("@") or first_arg.isdigit():
+            uid, uinfo = moderation.find_user_by_mention(chat_id, first_arg)
+            if uid:
+                name = uinfo.get("name") if uinfo else f"id_{uid}"
+                username = uinfo.get("username") if uinfo else first_arg.replace("@", "")
+                return uid, name, username, args[1:]
+    return None, None, None, args
 
-@bot.message_handler(commands=['help'])
-def handle_help(message):
+# ==========================================
+# COMMAND HANDLERS
+# ==========================================
+
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    moderation.register_user_info(message.chat.id, message.from_user)
+    welcome_text = (
+        "👋 *Привет! Я AI for copil (разработчик k3rnel).*\n\n"
+        "✨ *Мои возможности:*\n"
+        "💬 *Умный диалог:* отвечаю на любые вопросы, пишу скрипты (Lua, Python, JS, C++), помогаю с читами и играми.\n"
+        "🎨 *Генерация артов:* напиши `нарисуй [описание]` или нажми кнопку.\n"
+        "⚡️ *Живая печать:* вывожу мысли в реальном времени с анимацией `▌`.\n"
+        "🛡 *Модерация бесед:* добавь меня в группу админом, и я буду следить за порядком!\n\n"
+        "📌 *Команды для бесед:*\n"
+        "• `/staff` — состав администрации группы\n"
+        "• `/rules` — правила чата с интерактивными кнопками\n"
+        "• `/ban`, `/mute`, `/kick`, `/warn` — команды модерации\n"
+        "• `/modhelp` — полное руководство модератора"
+    )
+    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['modhelp'])
+def send_modhelp(message):
+    moderation.register_user_info(message.chat.id, message.from_user)
     help_text = (
-        "🤖 **AI for copil** (by k3rnel)\n\n"
-        "🎨 **Генерация фото (Flux HD):**\n"
-        "Напиши `/image неоновый спорткар` или *«нарисуй кота на скейте»* — бот создаст изображение без водяных знаков.\n\n"
-        "💻 **Кодинг и скрипты:**\n"
-        "Попроси написать любой скрипт на Lua (для Roblox / игр), Python или решить задачу.\n\n"
-        "🔄 **Память:**\n"
-        "Бот помнит наш диалог. Чтобы сбросить тему — напиши `/reset`."
+        "🛡 *РУКОВОДСТВО ПО МОДЕРАЦИИ И РОЛЯМ*\n\n"
+        "👑 *Иерархия ролей:*\n"
+        "1. **Владелец (Owner)** — полный контроль, выдача/снятие Админов и Модеров.\n"
+        "2. **Администратор (Admin)** — бан, мут, кик, варн, правила, выдача/снятие Модеров.\n"
+        "3. **Модератор (Moder)** — мут, кик, варн нарушителей.\n\n"
+        "👥 *Управление персоналом:*\n"
+        "• `/staff` — посмотреть состав администрации\n"
+        "• `/promote [moder/admin]` — повысить участника (ответом или по @нику)\n"
+        "• `/demote` — снять роль с участника (ответом или по @нику)\n\n"
+        "🔨 *Наказания (по ответу на сообщение или @нику):*\n"
+        "• `/ban [время] [причина]` — заблокировать (напр. `/ban 1d Спам` или `/ban навсегда`)\n"
+        "• `/unban [@ник/id]` — разбанить участника\n"
+        "• `/mute [время] [причина]` — лишить права писать (напр. `/mute 15m Флуд`)\n"
+        "• `/unmute` — снять мут\n"
+        "• `/kick [причина]` — исключить из беседы\n"
+        "• `/warn [причина]` — выдать предупреждение (3 варна = авто-мут на 24ч)\n"
+        "• `/unwarn` — снять варн\n\n"
+        "📜 *Правила чата:*\n"
+        "• `/rules` — показать правила чата\n"
+        "• `/setrules [текст]` — обновить правила чата"
     )
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
 
-@bot.message_handler(commands=['reset', 'clear'])
-def handle_reset(message):
+@bot.message_handler(commands=['staff', 'admins', 'team'])
+def cmd_staff(message):
     chat_id = message.chat.id
-    clear_user_history(chat_id)
-    bot.send_message(chat_id, "🔄 Память очищена! О чем пообщаемся?")
-
-@bot.message_handler(commands=['image', 'img', 'draw', 'photo'])
-def handle_image_command(message):
-    chat_id = message.chat.id
-    prompt = message.text.partition(' ')[2].strip()
-    if not prompt:
-        bot.send_message(chat_id, "🎨 Напиши после команды, что именно нарисовать!\nПример: `/image неоновый самурай в ночном городе`", parse_mode="Markdown")
+    if message.chat.type == "private":
+        bot.send_message(chat_id, "ℹ️ Команда `/staff` работает в группах и беседах!", parse_mode="Markdown")
         return
+    moderation.register_user_info(chat_id, message.from_user)
+    staff_msg = moderation.generate_staff_message(bot, chat_id)
+    bot.send_message(chat_id, staff_msg, parse_mode="Markdown")
 
-    bot.send_chat_action(chat_id, "upload_photo")
-    status_msg = bot.send_message(chat_id, "🎨 _Генерирую фото через Flux AI, секунду..._", parse_mode="Markdown")
+@bot.message_handler(commands=['promote', 'setadmin', 'setmoder', 'moder', 'admin'])
+def cmd_promote(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        bot.send_message(chat_id, "ℹ️ Эта команда работает в группах!", parse_mode="Markdown")
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
     
-    img_data, enhanced = generate_ai_image(prompt)
-    if img_data:
-        try:
-            bot.delete_message(chat_id, status_msg.message_id)
-        except Exception:
-            pass
-        bot.send_photo(chat_id, img_data, caption=f"✨ *Результат:* {prompt}", parse_mode="Markdown")
+    if issuer_lvl < 2:
+        bot.reply_to(message, "⛔️ Только Администраторы и Владелец могут назначать персонал!")
+        return
+        
+    tokens = message.text.split()
+    cmd = tokens[0].lower().replace("@pomoshotru_bot", "")
+    args = tokens[1:]
+    
+    target_id, target_name, target_user, remaining_args = extract_target_user(message, args)
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите пользователя ответом на его сообщение или через `@username`!\nПример: `/promote @username moder`")
+        return
+        
+    # Determine requested role
+    role_to_assign = "moder"
+    if "admin" in cmd:
+        role_to_assign = "admin"
+    elif "moder" in cmd:
+        role_to_assign = "moder"
+    elif remaining_args and remaining_args[0].lower() in ["admin", "админ", "администратор"]:
+        role_to_assign = "admin"
+    elif remaining_args and remaining_args[0].lower() in ["moder", "модер", "модератор"]:
+        role_to_assign = "moder"
+        
+    if role_to_assign == "admin" and issuer_lvl < 3:
+        bot.reply_to(message, "⛔️ Только Владелец группы может назначать Администраторов!")
+        return
+        
+    chat_data = moderation.get_chat_data(chat_id)
+    uid_str = str(target_id)
+    user_info = {"id": target_id, "name": target_name, "username": target_user}
+    
+    if role_to_assign == "admin":
+        if uid_str in chat_data.get("moders", {}):
+            del chat_data["moders"][uid_str]
+        if "admins" not in chat_data:
+            chat_data["admins"] = {}
+        chat_data["admins"][uid_str] = user_info
+        moderation.update_chat_data(chat_id, chat_data)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"🛡 Участник {user_mention} успешно назначен на должность *Администратора*!", parse_mode="Markdown")
     else:
+        if "moders" not in chat_data:
+            chat_data["moders"] = {}
+        chat_data["moders"][uid_str] = user_info
+        moderation.update_chat_data(chat_id, chat_data)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"⚔️ Участник {user_mention} успешно назначен на должность *Модератора*!", parse_mode="Markdown")
+
+@bot.message_handler(commands=['demote', 'unadmin', 'unmoder'])
+def cmd_demote(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        bot.send_message(chat_id, "ℹ️ Эта команда работает в группах!", parse_mode="Markdown")
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 2:
+        bot.reply_to(message, "⛔️ У вас нет прав снимать персонал!")
+        return
+        
+    tokens = message.text.split()
+    args = tokens[1:]
+    target_id, target_name, target_user, _ = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите пользователя ответом на его сообщение или через `@username`!")
+        return
+        
+    target_role, target_lvl = moderation.get_user_role(bot, chat_id, target_id)
+    if target_lvl >= issuer_lvl:
+        bot.reply_to(message, "⛔️ Вы не можете снять пользователя с равным или более высоким рангом!")
+        return
+        
+    chat_data = moderation.get_chat_data(chat_id)
+    uid_str = str(target_id)
+    removed = False
+    
+    if uid_str in chat_data.get("admins", {}):
+        del chat_data["admins"][uid_str]
+        removed = True
+    if uid_str in chat_data.get("moders", {}):
+        del chat_data["moders"][uid_str]
+        removed = True
+        
+    if removed:
+        moderation.update_chat_data(chat_id, chat_data)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"🔻 Участник {user_mention} был снят с должности персонала.", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "ℹ️ У данного пользователя не было назначенных должностей персонала.")
+
+@bot.message_handler(commands=['ban'])
+def cmd_ban(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 2:
+        bot.reply_to(message, "⛔️ Банить участников могут только Администраторы и Владелец!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, remaining_args = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кого забанить ответом на сообщение или по `@username`!\nПример: `/ban @username 1d Спам`")
+        return
+        
+    target_role, target_lvl = moderation.get_user_role(bot, chat_id, target_id)
+    if target_lvl >= issuer_lvl:
+        bot.reply_to(message, "⛔️ Вы не можете забанить пользователя с равным или более высоким рангом!")
+        return
+        
+    duration_sec = None
+    duration_text = "Навсегда"
+    reason = "Не указана"
+    
+    if remaining_args:
+        sec, dur_txt = moderation.parse_time_duration(remaining_args[0])
+        if dur_txt:
+            duration_sec = sec
+            duration_text = dur_txt
+            reason = " ".join(remaining_args[1:]).strip() or "Не указана"
+        else:
+            reason = " ".join(remaining_args).strip() or "Не указана"
+            
+    until_ts = int(time.time() + duration_sec) if duration_sec else 0
+    
+    try:
+        bot.ban_chat_member(chat_id, target_id, until_date=until_ts)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        issuer_mention = moderation.format_user_mention(issuer_id, message.from_user.first_name, message.from_user.username)
+        
+        ban_msg = (
+            f"🚫 *ПОЛЬЗОВАТЕЛЬ ЗАБЛОКИРОВАН*\n\n"
+            f"👤 *Нарушитель:* {user_mention}\n"
+            f"👮‍♂️ *Модератор:* {issuer_mention}\n"
+            f"⏳ *Срок:* `{duration_text}`\n"
+            f"📝 *Причина:* _{reason}_"
+        )
+        bot.send_message(chat_id, ban_msg, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Не удалось забанить: убедитесь, что бот является администратором с правом блокировки!")
+
+@bot.message_handler(commands=['unban'])
+def cmd_unban(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 2:
+        bot.reply_to(message, "⛔️ Разбанивать могут только Администраторы и Владелец!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, _ = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кого разбанить по `@username` или ID!\nПример: `/unban @username`")
+        return
+        
+    try:
+        bot.unban_chat_member(chat_id, target_id, only_if_banned=True)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"✅ Участник {user_mention} успешно разблокирован!", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Ошибка разбана: {e}")
+
+@bot.message_handler(commands=['mute'])
+def cmd_mute(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 1:
+        bot.reply_to(message, "⛔️ Мутить участников могут только Модераторы и Администраторы!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, remaining_args = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кого замутить ответом на сообщение или по `@username`!\nПример: `/mute 15m Флуд`")
+        return
+        
+    target_role, target_lvl = moderation.get_user_role(bot, chat_id, target_id)
+    if target_lvl >= issuer_lvl:
+        bot.reply_to(message, "⛔️ Вы не можете выдать мут пользователю с равным или более высоким рангом!")
+        return
+        
+    duration_sec = 600
+    duration_text = "10 мин."
+    reason = "Не указана"
+    
+    if remaining_args:
+        sec, dur_txt = moderation.parse_time_duration(remaining_args[0])
+        if dur_txt:
+            duration_sec = sec or (86400 * 365)
+            duration_text = dur_txt
+            reason = " ".join(remaining_args[1:]).strip() or "Не указана"
+        else:
+            reason = " ".join(remaining_args).strip() or "Не указана"
+            
+    until_ts = int(time.time() + duration_sec)
+    
+    try:
+        bot.restrict_chat_member(
+            chat_id,
+            target_id,
+            until_date=until_ts,
+            can_send_messages=False,
+            can_send_media_messages=False,
+            can_send_other_messages=False,
+            can_add_web_page_previews=False
+        )
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        issuer_mention = moderation.format_user_mention(issuer_id, message.from_user.first_name, message.from_user.username)
+        
+        mute_msg = (
+            f"🔇 *ПОЛЬЗОВАТЕЛЬ ЗАГЛУШЕН (МУТ)*\n\n"
+            f"👤 *Нарушитель:* {user_mention}\n"
+            f"👮‍♂️ *Модератор:* {issuer_mention}\n"
+            f"⏳ *Срок:* `{duration_text}`\n"
+            f"📝 *Причина:* _{reason}_"
+        )
+        bot.send_message(chat_id, mute_msg, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Не удалось замутить: убедитесь, что бот имеет права ограничения пользователей!")
+
+@bot.message_handler(commands=['unmute'])
+def cmd_unmute(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 1:
+        bot.reply_to(message, "⛔️ Снимать мут могут только Модераторы и Администраторы!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, _ = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кого размутить ответом или по нику!")
+        return
+        
+    try:
+        bot.restrict_chat_member(
+            chat_id,
+            target_id,
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True
+        )
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"🔊 Мут с пользователя {user_mention} успешно снят!", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Ошибка снятия мута: {e}")
+
+@bot.message_handler(commands=['kick'])
+def cmd_kick(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 1:
+        bot.reply_to(message, "⛔️ Кикать участников могут только Модераторы и Администраторы!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, remaining_args = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кого кикнуть ответом на сообщение или по `@username`!")
+        return
+        
+    target_role, target_lvl = moderation.get_user_role(bot, chat_id, target_id)
+    if target_lvl >= issuer_lvl:
+        bot.reply_to(message, "⛔️ Вы не можете кикнуть пользователя с равным или более высоким рангом!")
+        return
+        
+    reason = " ".join(remaining_args).strip() or "Не указана"
+    
+    try:
+        bot.ban_chat_member(chat_id, target_id)
+        bot.unban_chat_member(chat_id, target_id)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"👞 Участник {user_mention} был исключён из группы.\n📝 *Причина:* _{reason}_", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ Не удалось кикнуть: {e}")
+
+@bot.message_handler(commands=['warn'])
+def cmd_warn(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 1:
+        bot.reply_to(message, "⛔️ Выдавать предупреждения могут только Модераторы и Администраторы!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, remaining_args = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кому выдать варн ответом на сообщение или по нику!")
+        return
+        
+    target_role, target_lvl = moderation.get_user_role(bot, chat_id, target_id)
+    if target_lvl >= issuer_lvl:
+        bot.reply_to(message, "⛔️ Вы не можете выдать предупреждение пользователю с равным или более высоким рангом!")
+        return
+        
+    reason = " ".join(remaining_args).strip() or "Не указана"
+    chat_data = moderation.get_chat_data(chat_id)
+    uid_str = str(target_id)
+    
+    if "warns" not in chat_data:
+        chat_data["warns"] = {}
+        
+    curr_warns = chat_data["warns"].get(uid_str, 0) + 1
+    chat_data["warns"][uid_str] = curr_warns
+    moderation.update_chat_data(chat_id, chat_data)
+    
+    user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+    
+    if curr_warns >= 3:
+        chat_data["warns"][uid_str] = 0
+        moderation.update_chat_data(chat_id, chat_data)
+        until_ts = int(time.time() + 86400)
         try:
-            bot.edit_message_text("⚠️ Не удалось сгенерировать изображение. Попробуй изменить запрос!", chat_id=chat_id, message_id=status_msg.message_id)
+            bot.restrict_chat_member(chat_id, target_id, until_date=until_ts, can_send_messages=False)
+            bot.send_message(chat_id, f"⚠️ {user_mention} набрал *3/3 предупреждений* и отправлен в мут на 24 часа!", parse_mode="Markdown")
         except Exception:
-            pass
+            bot.send_message(chat_id, f"⚠️ {user_mention} набрал *3/3 предупреждений*!", parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, f"⚠️ *ПРЕДУПРЕЖДЕНИЕ [{curr_warns}/3]*\n\n👤 *Нарушитель:* {user_mention}\n📝 *Причина:* _{reason}_", parse_mode="Markdown")
+
+@bot.message_handler(commands=['unwarn'])
+def cmd_unwarn(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 1:
+        bot.reply_to(message, "⛔️ Снимать предупреждения могут только Модераторы и Администраторы!")
+        return
+        
+    args = message.text.split()[1:]
+    target_id, target_name, target_user, _ = extract_target_user(message, args)
+    
+    if not target_id:
+        bot.reply_to(message, "⚠️ Укажите кому снять варн ответом на сообщение!")
+        return
+        
+    chat_data = moderation.get_chat_data(chat_id)
+    uid_str = str(target_id)
+    curr = chat_data.get("warns", {}).get(uid_str, 0)
+    
+    if curr > 0:
+        chat_data["warns"][uid_str] = curr - 1
+        moderation.update_chat_data(chat_id, chat_data)
+        user_mention = moderation.format_user_mention(target_id, target_name, target_user)
+        bot.send_message(chat_id, f"✅ С участника {user_mention} снят 1 варн (теперь: {curr - 1}/3)", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "ℹ️ У данного пользователя нет активных предупреждений.")
+
+@bot.message_handler(commands=['rules'])
+def cmd_rules(message):
+    chat_id = message.chat.id
+    moderation.register_user_info(chat_id, message.from_user)
+    chat_data = moderation.get_chat_data(chat_id, getattr(message.chat, "title", "Беседа"))
+    
+    rules_text = chat_data.get("rules", "📌 *Правила чата пока не установлены.*")
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_agree = types.InlineKeyboardButton("✅ Ознакомлен", callback_data="rules_agree")
+    btn_staff = types.InlineKeyboardButton("👑 Состав администрации", callback_data="view_staff")
+    markup.add(btn_agree, btn_staff)
+    
+    bot.send_message(chat_id, f"📜 *ПРАВИЛА БЕСЕДЫ*\n\n{rules_text}", parse_mode="Markdown", reply_markup=markup)
+
+@bot.message_handler(commands=['setrules'])
+def cmd_setrules(message):
+    chat_id = message.chat.id
+    if message.chat.type == "private":
+        bot.send_message(chat_id, "ℹ️ Эта команда работает в группах!", parse_mode="Markdown")
+        return
+        
+    issuer_id = message.from_user.id
+    moderation.register_user_info(chat_id, message.from_user)
+    issuer_role, issuer_lvl = moderation.get_user_role(bot, chat_id, issuer_id)
+    
+    if issuer_lvl < 2:
+        bot.reply_to(message, "⛔️ Изменять правила могут только Администраторы и Владелец!")
+        return
+        
+    new_rules = message.text.replace("/setrules", "", 1).strip()
+    if not new_rules:
+        bot.reply_to(message, "⚠️ Укажите текст правил после команды!\nПример: `/setrules 1. Без мата\n2. Без спама`", parse_mode="Markdown")
+        return
+        
+    chat_data = moderation.get_chat_data(chat_id, getattr(message.chat, "title", "Беседа"))
+    chat_data["rules"] = new_rules
+    moderation.update_chat_data(chat_id, chat_data)
+    
+    bot.send_message(chat_id, "✅ *Правила чата успешно обновлены!*", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     chat_id = call.message.chat.id
-    if call.data == "clear_context":
+    moderation.register_user_info(chat_id, call.from_user)
+    
+    if call.data == "rules_agree":
+        bot.answer_callback_query(call.id, f"Спасибо, {call.from_user.first_name}! Приятного общения в чате!", show_alert=True)
+    elif call.data == "view_staff":
+        staff_msg = moderation.generate_staff_message(bot, chat_id)
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, staff_msg, parse_mode="Markdown")
+    elif call.data == "clear_context":
         clear_user_history(chat_id)
         bot.answer_callback_query(call.id, "Память очищена!")
         bot.send_message(chat_id, "🔄 История диалога очищена. Начнем сначала!")
@@ -282,7 +746,7 @@ def handle_callback(call):
             user_histories[chat_id] = history
     elif call.data == "draw_topic":
         bot.answer_callback_query(call.id, "Создаю иллюстрацию...")
-        last_prompt = last_user_prompts.get(chat_id, "futuristic art")
+        last_prompt = last_user_prompts.get(chat_id, "futuristic neon art")
         bot.send_chat_action(chat_id, "upload_photo")
         status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{last_prompt[:50]}*...", parse_mode="Markdown")
         img_data, enhanced = generate_ai_image(last_prompt)
@@ -296,6 +760,7 @@ def handle_callback(call):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     chat_id = message.chat.id
+    moderation.register_user_info(chat_id, message.from_user)
     bot.send_chat_action(chat_id, "typing")
 
     try:
@@ -333,8 +798,11 @@ def handle_text(message):
     user_text = message.text.strip()
     lower_text = user_text.lower()
     last_user_prompts[chat_id] = user_text
+    moderation.register_user_info(chat_id, message.from_user)
 
-    # Trigger image generation on natural Russian phrases and commands
+    is_group = message.chat.type in ["group", "supergroup"]
+
+    # Image generation triggers
     image_prefixes = [
         "нарисуй мне ", "нарисуй пожалуйста ", "нарисуй ", "нарисуй:",
         "сгенерируй фото ", "сгенерируй картинку ", "сгенерируй арт ", "сгенерируй ",
@@ -347,14 +815,14 @@ def handle_text(message):
             prompt = user_text[len(prefix):].strip()
             if prompt:
                 bot.send_chat_action(chat_id, "upload_photo")
-                status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{prompt}*...", parse_mode="Markdown")
+                status_msg = bot.send_message(chat_id, f"🎨 Рисую через Flux AI: *{prompt}*...", parse_mode="Markdown", reply_to_message_id=message.message_id)
                 img_data, enhanced = generate_ai_image(prompt)
                 if img_data:
                     try:
                         bot.delete_message(chat_id, status_msg.message_id)
                     except Exception:
                         pass
-                    bot.send_photo(chat_id, img_data, caption=f"✨ *Готово:* {prompt}", parse_mode="Markdown")
+                    bot.send_photo(chat_id, img_data, caption=f"✨ *Готово:* {prompt}", parse_mode="Markdown", reply_to_message_id=message.message_id)
                     return
                 else:
                     try:
@@ -363,11 +831,29 @@ def handle_text(message):
                         pass
                     return
 
+    # In groups: respond with AI only when addressed directly or replied to
+    bot_username = "pomoshotru_bot"
+    is_addressed = False
+    clean_ai_prompt = user_text
+
+    if is_group:
+        if f"@{bot_username}" in lower_text:
+            is_addressed = True
+            clean_ai_prompt = re.sub(rf"@{bot_username}", "", user_text, flags=re.IGNORECASE).strip()
+        elif message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot and message.reply_to_message.from_user.username and message.reply_to_message.from_user.username.lower() == bot_username:
+            is_addressed = True
+        elif lower_text.startswith("/ai ") or lower_text.startswith("бот "):
+            is_addressed = True
+            clean_ai_prompt = re.sub(r"^(/ai|бот)\s*", "", user_text, flags=re.IGNORECASE).strip()
+            
+        if not is_addressed:
+            return  # Do not spam group chat on regular conversations
+
     # Real-time Stream Typing Chat with Gemini
     history = get_user_history(chat_id)
     history.append({
         "role": "user",
-        "parts": [{"text": user_text}]
+        "parts": [{"text": clean_ai_prompt or user_text}]
     })
 
     if len(history) > config.MAX_HISTORY_LEN:
@@ -376,10 +862,15 @@ def handle_text(message):
 
     response_text = stream_gemini_to_telegram(chat_id, history, reply_to_message_id=message.message_id)
 
+    history.append({
+        "role": "model",
+        "parts": [{"text": response_text}]
+    })
     user_histories[chat_id] = history
 
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+# ==========================================
+# HEALTHCHECK HTTP SERVER (RENDER COMPATIBLE)
+# ==========================================
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -397,7 +888,7 @@ def run_healthcheck_server():
     server.serve_forever()
 
 def start_polling_loop():
-    print("🚀 AI for copil (by k3rnel) успешно запущен с Flux AI!")
+    print("🚀 AI for copil (by k3rnel) успешно запущен!")
     print("👉 Telegram: https://t.me/Pomoshotru_bot")
     while True:
         try:
