@@ -368,11 +368,25 @@ def handle_text(message):
 
     response_text = stream_gemini_to_telegram(chat_id, history, reply_to_message_id=message.message_id)
 
-    history.append({
-        "role": "model",
-        "parts": [{"text": response_text}]
-    })
     user_histories[chat_id] = history
+
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"AI for copil bot is running 24/7!")
+
+    def log_message(self, format, *args):
+        pass
+
+def run_healthcheck_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
 
 def start_polling_loop():
     print("🚀 AI for copil (by k3rnel) успешно запущен с Flux AI!")
@@ -385,4 +399,6 @@ def start_polling_loop():
             time.sleep(3)
 
 if __name__ == "__main__":
+    t = threading.Thread(target=run_healthcheck_server, daemon=True)
+    t.start()
     start_polling_loop()
